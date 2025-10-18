@@ -57,8 +57,7 @@
             addDoc, 
             deleteDoc, 
             doc,
-            getDocs,
-            where,
+            updateDoc, // Added for editing
             setLogLevel 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
@@ -66,7 +65,6 @@
         setLogLevel('debug');
 
         // --- Global Variable Configuration ---
-        // We check if the expected secure variables are defined.
         const IS_SECURE_ENVIRONMENT = typeof __firebase_config !== 'undefined' && typeof __initial_auth_token !== 'undefined';
         
         const firebaseConfig = IS_SECURE_ENVIRONMENT ? JSON.parse(__firebase_config) : {};
@@ -158,6 +156,7 @@
             window.closeModal = closeModal;
             window.handleConfirm = handleConfirm;
         };
+        window.closeModal = closeModal; // Ensure global access for edit modal
 
         // --- Data Handling ---
 
@@ -258,6 +257,87 @@
                 `Delete ${name}`
             );
         };
+        
+        // --- Edit Route Functionality ---
+
+        const handleUpdateRoute = async (e) => {
+            e.preventDefault();
+
+            if (!db) {
+                showModal('Database Unavailable', 'Cannot update routes. The database connection is only available in the secure development environment.', 'error');
+                return;
+            }
+
+            const form = e.target;
+            const routeId = form['routeId'].value;
+            const newRouteName = form['editRouteName'].value.trim();
+            const newBusNumber = form['editBusNumber'].value.trim();
+            
+            if (!newRouteName || !newBusNumber || isNaN(parseInt(newBusNumber, 10))) {
+                showModal('Validation Error', 'Please enter a valid descriptive route name and bus number.', 'error');
+                return;
+            }
+            
+            // Check for name conflict (excluding the current route being edited)
+            if (currentRoutes.some(r => r.id !== routeId && r.routeName.toUpperCase() === newRouteName.toUpperCase())) {
+                showModal('Conflict', `Route name '${newRouteName}' already exists for another route.`, 'error');
+                return;
+            }
+
+            try {
+                const routeRef = doc(db, getCollectionPath(), routeId);
+                await updateDoc(routeRef, {
+                    routeName: newRouteName,
+                    busNumber: parseInt(newBusNumber, 10)
+                });
+                closeModal();
+                showModal('Success', `Route updated to '${newRouteName}' (Bus ${newBusNumber}).`, 'message');
+            } catch (error) {
+                console.error("Error updating route:", error);
+                showModal('Database Error', 'Failed to update the route. Check console for details.', 'error');
+            }
+        };
+        window.handleUpdateRoute = handleUpdateRoute; // Expose globally
+
+        window.showEditModal = (routeId, routeName, busNumber) => {
+            if (!db && !IS_SECURE_ENVIRONMENT) {
+                 showModal('Database Unavailable', 'Cannot edit routes. The database connection is only available in the secure development environment.', 'error');
+                return;
+            }
+
+            const editModalContent = `
+                <form id="edit-route-form" onsubmit="handleUpdateRoute(event)" class="space-y-4 p-2">
+                    <input type="hidden" name="routeId" value="${routeId}" />
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Route Name</label>
+                        <input type="text" id="editRouteName" name="editRouteName" required value="${routeName}"
+                                class="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Bus Number</label>
+                        <input type="number" id="editBusNumber" name="editBusNumber" required value="${busNumber}"
+                                class="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2" />
+                    </div>
+                    
+                    <div class="flex justify-end pt-4 space-x-3">
+                        <button 
+                            type="button"
+                            class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-150"
+                            onclick="closeModal()"
+                        >
+                            Cancel
+                        </button>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md">
+                            Save Changes
+                        </button>
+                    </div>
+                </form>
+            `;
+            showModal(`Edit Route: ${routeName}`, editModalContent, 'edit');
+            
+            // Note: handleUpdateRoute is exposed globally via window.handleUpdateRoute
+        };
+        window.showEditModal = showEditModal; // Expose globally
         
         // --- Authentication & View Switching ---
 
@@ -364,7 +444,7 @@
                                 : 'Select a route above to view the bus number.'}
                         </p>
                         <p class="text-6xl font-extrabold text-indigo-600 transition-all duration-300">
-                            ${selectedRoute ? selectedRoute.busNumber : 'N/A'}
+                            ${selectedRoute ? selectedBusNumber : 'N/A'}
                         </p>
                     </div>
                 </div>
@@ -397,7 +477,7 @@
             const dbWarning = isExternal ? `
                 <div class="mt-4 p-4 text-center bg-red-100 border border-red-400 text-red-700 rounded-lg">
                     <p class="font-bold">Database Disconnected</p>
-                    <p class="text-sm">Route addition and deletion are disabled. This is normal when the application is run outside the secure development environment.</p>
+                    <p class="text-sm">Route addition, editing, and deletion are disabled. This is normal when the application is run outside the secure development environment.</p>
                 </div>
             ` : '';
 
@@ -457,14 +537,26 @@
                             No routes have been added yet. Use the form above to get started.
                         </p>
                     ` : currentRoutes.map(route => `
-                        <div key="${route.id}" class="flex items-center justify-between bg-white p-4 rounded-xl border border-gray-200 shadow-md transition duration-100 hover:shadow-lg">
-                            <div class="text-lg font-medium text-gray-700">
-                                <span class="font-bold text-green-600">${route.routeName}</span>: Bus ${route.busNumber}
-                            </div>
+                        <div class="flex items-center justify-between bg-white p-2 rounded-xl border border-gray-200 shadow-md transition duration-100 hover:shadow-lg">
+                            <!-- EDIT BUTTON (the whole row) -->
+                            <button
+                                onclick="showEditModal('${route.id}', '${route.routeName}', '${route.busNumber}')"
+                                class="flex-1 text-left p-2 focus:outline-none hover:bg-gray-50 rounded-lg transition duration-150"
+                                ${isExternal ? 'disabled' : ''}
+                            >
+                                <span class="text-lg font-medium text-gray-700">
+                                    <span class="font-bold text-green-600">${route.routeName}</span>: Bus ${route.busNumber}
+                                </span>
+                                ${!isExternal ? `
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline ml-2 text-gray-400" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zm-3.182 3.182l-7 7V17h3.182l7-7-2.828-2.828z"/></svg>
+                                ` : ''}
+                            </button>
+                            <!-- DELETE BUTTON -->
                             <button 
                                 onclick="handleDelete('${route.id}', '${route.routeName}', '${route.busNumber}')"
                                 class="text-red-500 hover:text-red-700 p-2 rounded-full hover:bg-red-100 transition duration-150 shadow-sm ${isExternal ? 'opacity-50 pointer-events-none' : ''}"
                                 aria-label="Delete route ${route.routeName}"
+                                ${isExternal ? 'disabled' : ''}
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                             </button>
