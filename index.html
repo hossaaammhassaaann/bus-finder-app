@@ -592,13 +592,20 @@
             if (!IS_SECURE_ENVIRONMENT) {
                 console.warn("External environment detected. Firebase connection skipped. Using static data.");
                 
-                // --- STATIC ROUTES DEFINED HERE (Your requested routes + extra for testing) ---
+                // =======================================================
+                // <<< START EDITING STATIC ROUTES HERE >>>
+                // Edit the objects below to change the routes shown 
+                // in the non-secure (external) environment.
+                // =======================================================
                 currentRoutes = [
-                    { id: 'dummy-bahr', routeName: 'Bahr', busNumber: '1' }, 
-                    { id: 'dummy-sidi', routeName: 'Sidi Gaber', busNumber: '2' },
-                    { id: 'dummy-city-center', routeName: 'City Center', busNumber: '50A' },
-                    { id: 'dummy-west-suburb', routeName: 'West Suburb', busNumber: '201' }
+                    { id: 'static-bahr', routeName: 'Bahr', busNumber: '1' }, 
+                    { id: 'static-sidi', routeName: 'Sidi Gaber', busNumber: '2' },
+                    { id: 'static-kanat', routeName: 'Kanat El Sweis', busNumber: '3' },
+                    { id: 'static-gleem', routeName: 'Gleem', busNumber: '4' }
                 ];
+                // =======================================================
+                // <<< END EDITING STATIC ROUTES HERE >>>
+                // =======================================================
 
                 // Check local storage for existing admin session
                 if (localStorage.getItem(ADMIN_KEY_LS) === 'true') {
@@ -636,17 +643,7 @@
                 // renderApp() is called by loadRoutes() on the first data snapshot
             } catch (error) {
                 console.error("Firebase Initialization Fatal Error:", error);
-                // In a secure environment, if init fails, we log and proceed to show an error 
-                // via loadRoutes, but we do not show the Configuration Error modal as we did before.
-                // The loadRoutes onSnapshot error handler will manage any data sync issues.
-                
-                // In this rare case of full init failure, we fall back to static data for usability
-                if (currentRoutes.length === 0) {
-                     currentRoutes = [
-                        { id: 'fallback-bahr', routeName: 'Bahr (Fallback)', busNumber: '1' }, 
-                        { id: 'fallback-sidi', routeName: 'Sidi Gaber (Fallback)', busNumber: '2' }
-                    ];
-                }
+                // The app will now display whatever data it has (likely the static routes if in external mode, or an empty list if in secure mode).
                 renderApp();
             }
         };
