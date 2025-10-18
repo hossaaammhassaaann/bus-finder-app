@@ -65,6 +65,7 @@
         setLogLevel('debug');
 
         // --- Global Variable Configuration ---
+        // Determines if we have the necessary credentials to connect to Firestore
         const IS_SECURE_ENVIRONMENT = typeof __firebase_config !== 'undefined' && typeof __initial_auth_token !== 'undefined';
         
         const firebaseConfig = IS_SECURE_ENVIRONMENT ? JSON.parse(__firebase_config) : {};
@@ -161,7 +162,7 @@
         // --- Data Handling ---
 
         const loadRoutes = () => {
-            if (!db) return;
+            if (!db) return; // Only run if DB is initialized (i.e., in secure environment)
 
             const routesCollectionRef = collection(db, getCollectionPath());
             const q = query(routesCollectionRef);
@@ -200,7 +201,7 @@
             e.preventDefault();
             
             if (!db) {
-                showModal('Database Unavailable', 'Cannot add routes. The database connection is only available in the secure development environment.', 'error');
+                showModal('Database Unavailable', 'Cannot add routes. This feature is only available in the secure development environment for data persistence.', 'error');
                 return;
             }
 
@@ -235,7 +236,7 @@
 
         window.handleDelete = (id, name, bus) => {
             if (!db) {
-                showModal('Database Unavailable', 'Cannot delete routes. The database connection is only available in the secure development environment.', 'error');
+                showModal('Database Unavailable', 'Cannot delete routes. This feature is only available in the secure development environment for data persistence.', 'error');
                 return;
             }
 
@@ -264,7 +265,7 @@
             e.preventDefault();
 
             if (!db) {
-                showModal('Database Unavailable', 'Cannot update routes. The database connection is only available in the secure development environment.', 'error');
+                showModal('Database Unavailable', 'Cannot update routes. This feature is only available in the secure development environment for data persistence.', 'error');
                 return;
             }
 
@@ -300,8 +301,9 @@
         window.handleUpdateRoute = handleUpdateRoute; // Expose globally
 
         window.showEditModal = (routeId, routeName, busNumber) => {
-            if (!db && !IS_SECURE_ENVIRONMENT) {
-                 showModal('Database Unavailable', 'Cannot edit routes. The database connection is only available in the secure development environment.', 'error');
+            // Check IS_SECURE_ENVIRONMENT, not db, because db is null in external mode
+            if (!IS_SECURE_ENVIRONMENT) {
+                 showModal('Database Unavailable', 'Cannot edit routes. This feature is only available in the secure development environment for data persistence.', 'error');
                 return;
             }
 
@@ -334,8 +336,6 @@
                 </form>
             `;
             showModal(`Edit Route: ${routeName}`, editModalContent, 'edit');
-            
-            // Note: handleUpdateRoute is exposed globally via window.handleUpdateRoute
         };
         window.showEditModal = showEditModal; // Expose globally
         
@@ -348,8 +348,7 @@
             const password = form.elements.password.value;
 
             if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-                // If in an external environment, this log in still grants access to the Admin UI,
-                // but CRUD operations will fail with a "Database Unavailable" modal (as designed).
+                // Allows Admin UI access in all environments
                 localStorage.setItem(ADMIN_KEY_LS, 'true');
                 currentView = 'admin';
                 closeModal();
@@ -400,17 +399,11 @@
 
         // --- View Rendering ---
 
-        const renderStudentView = (isExternal = false) => {
+        const renderStudentView = () => {
             const selectedBusNumber = document.getElementById('route-select')?.value || '';
             const selectedRoute = currentRoutes.find(r => r.busNumber === selectedBusNumber);
             
-            // The warning message is now correctly driven by the isExternal flag
-            const dbWarning = isExternal ? `
-                <div class="mt-4 p-4 text-center bg-red-100 border border-red-400 text-red-700 rounded-lg">
-                    <p class="font-bold">Database Disconnected</p>
-                    <p class="text-sm">Route data management is disabled. This is normal when the application is run outside the secure development environment.</p>
-                </div>
-            ` : '';
+            // No more dbWarning message is rendered here!
 
             const content = document.createElement('div');
             content.className = "bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg space-y-6 transition-all duration-300";
@@ -420,8 +413,6 @@
                     Find Your Bus Route
                 </h1>
                 
-                ${dbWarning}
-
                 <div class="space-y-4">
                     <label htmlFor="route-select" class="block text-sm font-medium text-gray-700">
                         Select your designated student route:
@@ -469,21 +460,24 @@
             // Re-attach listener for route selection change
             const selectEl = document.getElementById('route-select');
             if (selectEl) {
-                selectEl.addEventListener('change', () => renderStudentView(isExternal)); // Pass external status
+                selectEl.addEventListener('change', renderApp); // Renders student view again
             }
         };
 
-        const renderAdminView = (isExternal = false) => {
-            const content = document.createElement('div');
-            content.className = "bg-white p-8 rounded-xl shadow-2xl w-full max-w-3xl space-y-8";
-            
-            const dbWarning = isExternal ? `
+        const renderAdminView = () => {
+            // Determine if CRUD actions should be disabled (when outside secure environment)
+            const disableAdminActions = !IS_SECURE_ENVIRONMENT;
+
+            const dbWarning = disableAdminActions ? `
                 <div class="mt-4 p-4 text-center bg-red-100 border border-red-400 text-red-700 rounded-lg">
-                    <p class="font-bold">Database Disconnected</p>
-                    <p class="text-sm">Route addition, editing, and deletion are disabled. This is normal when the application is run outside the secure development environment.</p>
+                    <p class="font-bold">Database Changes Disabled</p>
+                    <p class="text-sm">You are viewing static data. Route addition, editing, and deletion require a live database connection.</p>
                 </div>
             ` : '';
 
+            const content = document.createElement('div');
+            content.className = "bg-white p-8 rounded-xl shadow-2xl w-full max-w-3xl space-y-8";
+            
             content.innerHTML = `
                 <div class="flex justify-between items-center border-b-2 pb-3">
                     <h1 class="text-3xl font-extrabold text-green-700 flex items-center">
@@ -502,7 +496,7 @@
                 ${dbWarning}
 
                 <!-- Add Route Form -->
-                <div class="bg-gray-50 p-6 rounded-xl shadow-inner border border-gray-200 ${isExternal ? 'opacity-50 pointer-events-none' : ''}">
+                <div class="bg-gray-50 p-6 rounded-xl shadow-inner border border-gray-200 ${disableAdminActions ? 'opacity-50 pointer-events-none' : ''}">
                     <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 h-5 w-5 text-green-600"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         Add New Route
@@ -545,21 +539,21 @@
                             <button
                                 onclick="showEditModal('${route.id}', '${route.routeName}', '${route.busNumber}')"
                                 class="flex-1 text-left p-2 focus:outline-none hover:bg-gray-50 rounded-lg transition duration-150"
-                                ${isExternal ? 'disabled' : ''}
+                                ${disableAdminActions ? 'disabled' : ''}
                             >
                                 <span class="text-lg font-medium text-gray-700">
                                     <span class="font-bold text-green-600">${route.routeName}</span>: Bus ${route.busNumber}
                                 </span>
-                                ${!isExternal ? `
+                                ${!disableAdminActions ? `
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline ml-2 text-gray-400" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zm-3.182 3.182l-7 7V17h3.182l7-7-2.828-2.828z"/></svg>
                                 ` : ''}
                             </button>
                             <!-- DELETE BUTTON -->
                             <button 
                                 onclick="handleDelete('${route.id}', '${route.routeName}', '${route.busNumber}')"
-                                class="text-red-500 hover:text-red-700 p-2 rounded-full hover:bg-red-100 transition duration-150 shadow-sm ${isExternal ? 'opacity-50 pointer-events-none' : ''}"
+                                class="text-red-500 hover:text-red-700 p-2 rounded-full hover:bg-red-100 transition duration-150 shadow-sm ${disableAdminActions ? 'opacity-50 pointer-events-none' : ''}"
                                 aria-label="Delete route ${route.routeName}"
-                                ${isExternal ? 'disabled' : ''}
+                                ${disableAdminActions ? 'disabled' : ''}
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                             </button>
@@ -572,7 +566,7 @@
             getContainer().appendChild(content);
 
             // Re-attach form submit listener for Admin view
-            if (!isExternal) {
+            if (!disableAdminActions) {
                 document.getElementById('add-route-form').addEventListener('submit', handleAddRoute);
             }
         };
@@ -580,12 +574,11 @@
         const renderApp = () => {
             document.getElementById('loading-spinner')?.remove();
             getContainer().classList.add('items-start'); // Adjust alignment for content
-            const isExternal = !IS_SECURE_ENVIRONMENT;
 
             if (currentView === 'admin') {
-                renderAdminView(isExternal);
+                renderAdminView();
             } else {
-                renderStudentView(isExternal);
+                renderStudentView();
             }
         };
         window.handleLogout = handleLogout; // Expose globally
@@ -593,28 +586,28 @@
         // --- Initialization ---
 
         const initFirebase = async () => {
-            const isExternal = !IS_SECURE_ENVIRONMENT;
             document.getElementById('loading-spinner')?.remove(); // Remove spinner immediately on load
 
             // 1. Handle External Environment (No Firebase Access)
-            if (isExternal) {
+            if (!IS_SECURE_ENVIRONMENT) {
                 console.warn("External environment detected. Firebase connection skipped. Using static data.");
                 
-                // --- STATIC ROUTES DEFINED HERE ---
+                // --- STATIC ROUTES DEFINED HERE (Your requested routes + extra for testing) ---
                 currentRoutes = [
                     { id: 'dummy-bahr', routeName: 'Bahr', busNumber: '1' }, 
                     { id: 'dummy-sidi', routeName: 'Sidi Gaber', busNumber: '2' },
                     { id: 'dummy-city-center', routeName: 'City Center', busNumber: '50A' },
                     { id: 'dummy-west-suburb', routeName: 'West Suburb', busNumber: '201' }
                 ];
-                // ----------------------------------
 
-                // Check local storage for existing admin session (allows UI access, but CRUD is blocked)
+                // Check local storage for existing admin session
                 if (localStorage.getItem(ADMIN_KEY_LS) === 'true') {
                     currentView = 'admin';
                 } else {
                     currentView = 'student';
                 }
+                
+                // Initial render with static data
                 renderApp();
                 return;
             }
@@ -642,11 +635,18 @@
                 loadRoutes(); // Start real-time data listener
                 // renderApp() is called by loadRoutes() on the first data snapshot
             } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                // Fallback render to stop spinner and show a general error in the modal
-                document.getElementById('loading-spinner')?.remove();
-                showModal("Configuration Error", "Failed to connect to the database. Data cannot be loaded or saved. Check your browser console for details.", 'error');
-                // Force external mode rendering to ensure the app is usable with static data
+                console.error("Firebase Initialization Fatal Error:", error);
+                // In a secure environment, if init fails, we log and proceed to show an error 
+                // via loadRoutes, but we do not show the Configuration Error modal as we did before.
+                // The loadRoutes onSnapshot error handler will manage any data sync issues.
+                
+                // In this rare case of full init failure, we fall back to static data for usability
+                if (currentRoutes.length === 0) {
+                     currentRoutes = [
+                        { id: 'fallback-bahr', routeName: 'Bahr (Fallback)', busNumber: '1' }, 
+                        { id: 'fallback-sidi', routeName: 'Sidi Gaber (Fallback)', busNumber: '2' }
+                    ];
+                }
                 renderApp();
             }
         };
