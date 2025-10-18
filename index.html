@@ -348,6 +348,8 @@
             const password = form.elements.password.value;
 
             if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+                // If in an external environment, this log in still grants access to the Admin UI,
+                // but CRUD operations will fail with a "Database Unavailable" modal (as designed).
                 localStorage.setItem(ADMIN_KEY_LS, 'true');
                 currentView = 'admin';
                 closeModal();
@@ -402,6 +404,7 @@
             const selectedBusNumber = document.getElementById('route-select')?.value || '';
             const selectedRoute = currentRoutes.find(r => r.busNumber === selectedBusNumber);
             
+            // The warning message is now correctly driven by the isExternal flag
             const dbWarning = isExternal ? `
                 <div class="mt-4 p-4 text-center bg-red-100 border border-red-400 text-red-700 rounded-lg">
                     <p class="font-bold">Database Disconnected</p>
@@ -591,28 +594,32 @@
 
         const initFirebase = async () => {
             const isExternal = !IS_SECURE_ENVIRONMENT;
+            document.getElementById('loading-spinner')?.remove(); // Remove spinner immediately on load
 
-            // 1. Check if configuration exists
+            // 1. Handle External Environment (No Firebase Access)
             if (isExternal) {
-                console.warn("External environment detected. Firebase connection skipped.");
+                console.warn("External environment detected. Firebase connection skipped. Using static data.");
                 
                 // --- STATIC ROUTES DEFINED HERE ---
                 currentRoutes = [
                     { id: 'dummy-bahr', routeName: 'Bahr', busNumber: '1' }, 
-                    { id: 'dummy-sidi', routeName: 'Sidi Gaber', busNumber: '2' }
+                    { id: 'dummy-sidi', routeName: 'Sidi Gaber', busNumber: '2' },
+                    { id: 'dummy-city-center', routeName: 'City Center', busNumber: '50A' },
+                    { id: 'dummy-west-suburb', routeName: 'West Suburb', busNumber: '201' }
                 ];
                 // ----------------------------------
 
-                currentView = 'student';
-                // Check local storage for existing admin session (still allows admin login, but no DB access)
+                // Check local storage for existing admin session (allows UI access, but CRUD is blocked)
                 if (localStorage.getItem(ADMIN_KEY_LS) === 'true') {
                     currentView = 'admin';
+                } else {
+                    currentView = 'student';
                 }
                 renderApp();
                 return;
             }
 
-            // 2. Proceed with secure initialization
+            // 2. Proceed with secure initialization (Only runs in Canvas)
             try {
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -639,6 +646,8 @@
                 // Fallback render to stop spinner and show a general error in the modal
                 document.getElementById('loading-spinner')?.remove();
                 showModal("Configuration Error", "Failed to connect to the database. Data cannot be loaded or saved. Check your browser console for details.", 'error');
+                // Force external mode rendering to ensure the app is usable with static data
+                renderApp();
             }
         };
 
