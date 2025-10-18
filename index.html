@@ -1,488 +1,494 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bus Route Finder & Admin</title>
-    <!-- Load Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Load Inter Font -->
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f7f7f7;
-            min-height: 100vh;
-            display: flex;
-            align-items: flex-start; /* Changed to start to allow scrolling */
-            justify-content: center;
-            padding: 3rem;
+import React, { useState, useEffect, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
+import { 
+    getFirestore, 
+    collection, 
+    query, 
+    onSnapshot, 
+    addDoc, 
+    deleteDoc, 
+    doc,
+    setLogLevel 
+} from 'firebase/firestore';
+import { Clipboard, X, Bus, Plus, LogIn, LogOut, Trash2 } from 'lucide-react';
+
+// Use debug logging for Firestore for better visibility
+setLogLevel('debug');
+
+// --- Global Variable Configuration ---
+// These variables are provided by the hosting environment. We must use them.
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Mock Config */ };
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-bus-finder-app';
+
+// Application Constants (Hardcoded for simplicity)
+const ADMIN_USERNAME = "hossam_hassan";
+const ADMIN_PASSWORD = "hossammm";
+const ADMIN_KEY_LS = "bus_finder_admin_auth"; // Local Storage key for mock admin session
+
+// Firebase Path Utility
+const getCollectionPath = () => `artifacts/${APP_ID}/public/data/routes`;
+
+// --- Shared Components ---
+
+// A dynamic modal component for messages, errors, and confirmations
+const MessageModal = ({ modalState, closeModal, handleConfirm }) => {
+    if (!modalState.isOpen) return null;
+
+    const isError = modalState.type === 'error';
+    const isConfirm = modalState.type === 'confirm';
+    const titleColor = isError ? 'text-red-600' : 'text-gray-900';
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 relative">
+                {/* Close Button - Hidden for Auth/Confirm, visible for general messages */}
+                {!modalState.hideClose && (
+                    <button 
+                        className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition"
+                        onClick={closeModal}
+                        aria-label="Close modal"
+                    >
+                        <X className="h-6 w-6" />
+                    </button>
+                )}
+                <h3 className={`text-xl font-bold mb-4 ${titleColor}`}>{modalState.title}</h3>
+                <div className="text-gray-700">
+                    {typeof modalState.message === 'string' ? <p>{modalState.message}</p> : modalState.message}
+                </div>
+                
+                {(isError || !isConfirm) && (
+                    <div className="flex justify-end mt-6">
+                         <button 
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md"
+                            onClick={closeModal}
+                        >
+                            {isError ? 'Dismiss' : 'OK'}
+                        </button>
+                    </div>
+                )}
+
+                {isConfirm && (
+                    <div className="flex justify-center space-x-4 mt-6">
+                        <button 
+                            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md"
+                            onClick={handleConfirm}
+                        >
+                            Yes, {modalState.confirmText || 'Confirm'}
+                        </button>
+                        <button 
+                            className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-150"
+                            onClick={closeModal}
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// --- View Components ---
+
+const StudentView = ({ routes, showLoginModal }) => {
+    const [selectedBusNumber, setSelectedBusNumber] = useState('');
+    
+    // Convert r.busNumber to string for strict comparison with selectedBusNumber (which is a string from <select>)
+    const selectedRoute = routes.find(r => String(r.busNumber) === selectedBusNumber);
+
+    return (
+        <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg space-y-6 transition-all duration-300">
+            <h1 className="text-3xl font-extrabold text-indigo-700 text-center border-b-2 pb-3 mb-4 flex items-center justify-center">
+                <Bus className="mr-3 h-7 w-7" />
+                Find Your Bus Route
+            </h1>
+            
+            <div className="space-y-4">
+                <label htmlFor="route-select" className="block text-sm font-medium text-gray-700">
+                    Select your designated student route:
+                </label>
+                <div className="relative">
+                    <select 
+                        id="route-select" 
+                        className="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 rounded-lg shadow-sm bg-white"
+                        onChange={(e) => setSelectedBusNumber(e.target.value)}
+                        value={selectedBusNumber}
+                    >
+                        <option value="">-- Select a Route --</option>
+                        {routes.map(route => (
+                            <option 
+                                key={route.id} 
+                                value={route.busNumber}
+                            >
+                                {/* UPDATED: Only show the custom route name */}
+                                {route.routeName}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                
+                <div className={`p-6 mt-4 rounded-xl text-center shadow-lg transition-all duration-300 ${selectedRoute ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-100 border border-gray-300'}`}>
+                    <p className="text-lg font-semibold text-gray-700 mb-2">
+                        {/* Display custom route name and remove hardcoded "Route" word */}
+                        {selectedRoute 
+                            ? <><span className="font-bold text-indigo-700">{selectedRoute.routeName}</span> assigned bus:</> 
+                            : 'Select a route above to view the bus number.'}
+                    </p>
+                    <p className="text-6xl font-extrabold text-indigo-600 transition-all duration-300">
+                        {selectedRoute ? selectedRoute.busNumber : 'N/A'}
+                    </p>
+                </div>
+            </div>
+            
+            <div className="pt-4 border-t mt-6 text-center">
+                <button 
+                    onClick={showLoginModal}
+                    className="text-sm text-gray-500 hover:text-indigo-600 transition duration-150 flex items-center mx-auto"
+                >
+                    <LogIn className="h-4 w-4 mr-1" />
+                    Admin Log In
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const AdminView = ({ routes, db, showModal, logout }) => {
+    // Renamed to routeName to reflect that it is a descriptive string
+    const [routeName, setRouteName] = useState(''); 
+    const [busNumber, setBusNumber] = useState('');
+
+    const handleAddRoute = async (e) => {
+        e.preventDefault();
+
+        const trimmedRouteName = routeName.trim();
+        const parsedBusNumber = parseInt(busNumber, 10);
+
+        if (!trimmedRouteName || isNaN(parsedBusNumber)) {
+            // Updated validation message for custom name
+            showModal('Validation Error', 'Please enter a valid descriptive route name and bus number.', 'error');
+            return;
         }
-        select {
-            appearance: none;
-            background-image: url('data:image/svg+xml,%3csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="current" %3e%3cpath fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/%3e%3c/svg%3e');
-            background-repeat: no-repeat;
-            background-position: right 0.75rem center;
-            background-size: 1.5em 1.5em;
+
+        // Check if routeName already exists (case-insensitive)
+        if (routes.some(r => String(r.routeName).toUpperCase() === trimmedRouteName.toUpperCase())) {
+            showModal('Conflict', `Route name '${trimmedRouteName}' already exists.`, 'error');
+            return;
         }
-        /* Modal Backdrop */
-        #modal-backdrop {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 50;
+
+        try {
+            await addDoc(collection(db, getCollectionPath()), {
+                routeName: trimmedRouteName, // Storing as routeName
+                busNumber: parsedBusNumber,
+                createdAt: Date.now()
+            });
+            showModal('Success', `Route '${trimmedRouteName}' (Bus ${parsedBusNumber}) added successfully.`, 'success');
+            setRouteName('');
+            setBusNumber('');
+        } catch (error) {
+            console.error("Error adding route:", error);
+            showModal('Database Error', 'Failed to save the new route. Check console for details.', 'error');
         }
-    </style>
-    <!-- Firebase SDKs -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, onSnapshot, collection, query, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        
-        // Use debug logging for troubleshooting.
-        setLogLevel('Debug');
-        
-        // --- PUBLIC MOCK CONFIGURATION (Required for Vercel deployment) ---
-        // These are placeholder values that allow Firebase to initialize its services 
-        // without a full sign-in process, bypassing environment variable failure.
-        const firebaseConfig = {
-            apiKey: "AIzaSyB_MockAPI_BusFinder_v1",
-            authDomain: "mock-bus-finder.firebaseapp.com",
-            projectId: "mock-bus-finder-app",
-            storageBucket: "mock-bus-finder.appspot.com",
-            messagingSenderId: "1234567890",
-            appId: "1:1234567890:web:mocked_app_id"
+    };
+
+    const handleDelete = (route) => {
+        const confirmDelete = async () => {
+            try {
+                await deleteDoc(doc(db, getCollectionPath(), route.id));
+                showModal('Deletion Complete', `Route '${route.routeName}' successfully removed.`, 'success');
+            } catch (error) {
+                console.error("Error deleting route:", error);
+                showModal('Database Error', 'Failed to delete the route. Check console for details.', 'error');
+            }
         };
 
-        // Globals 
-        let db, auth, userId, appId;
-        let isAuthReady = false;
-        let currentRoutes = [];
+        showModal(
+            'Confirm Deletion', 
+            // Updated confirmation message
+            `Are you sure you want to delete route '${route.routeName}' (Bus ${route.busNumber})? This cannot be undone.`, 
+            'confirm',
+            confirmDelete,
+            `Delete ${route.routeName}`
+        );
+    };
 
-        // Application Constants
-        const ADMIN_USERNAME = "hossam_hassan";
-        const ADMIN_PASSWORD = "hossammm";
-        const ADMIN_SECRET_KEY = "admin_key_123"; // Used to verify admin mode
+    return (
+        <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-3xl space-y-8">
+            <div className="flex justify-between items-center border-b-2 pb-3">
+                <h1 className="text-3xl font-extrabold text-green-700 flex items-center">
+                    <Clipboard className="mr-3 h-7 w-7" />
+                    Bus Route Administration
+                </h1>
+                <button 
+                    onClick={logout}
+                    className="text-sm text-red-500 hover:text-red-700 transition duration-150 flex items-center p-2 rounded-lg hover:bg-red-50"
+                >
+                    <LogOut className="h-5 w-5 mr-1" />
+                    Log Out
+                </button>
+            </div>
 
-        // --- Utility Functions ---
-        function getCollectionPath() {
-            // Public data collection path: /artifacts/{appId}/public/data/routes
-            return `artifacts/${appId}/public/data/routes`;
-        }
-        
-        function showModal(title, message, isError = false) {
-            const modal = document.getElementById('custom-modal');
-            document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-message').textContent = message;
-            
-            const titleElement = document.getElementById('modal-title');
-            // Remove previous color classes and add the new one
-            titleElement.classList.remove('text-red-600', 'text-gray-900', 'text-green-600');
-            titleElement.classList.add(isError ? 'text-red-600' : 'text-gray-900');
-
-            document.getElementById('modal-backdrop').classList.remove('hidden');
-            // Ensure the default close button is visible unless the modal is for login/confirm
-            document.getElementById('modal-close-btn').classList.remove('hidden');
-            
-            // Clear any old dynamically added buttons (like for confirmation)
-            const oldConfirmDiv = document.getElementById('confirm-delete-div');
-            if (oldConfirmDiv) oldConfirmDiv.remove();
-        }
-
-        function closeModal() {
-            document.getElementById('modal-backdrop').classList.add('hidden');
-            // Clear any old dynamically added buttons (like for confirmation)
-            const oldConfirmDiv = document.getElementById('confirm-delete-div');
-            if (oldConfirmDiv) oldConfirmDiv.remove();
-        }
-
-        // --- Core Firebase Initialization (The FIX is here) ---
-        async function initializeFirebase() {
-            try {
-                // Use a default app ID since we cannot rely on the canvas environment outside the canvas.
-                appId = 'bus-finder-live'; 
-
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                
-                // FIX: We skip signInAnonymously to prevent the 'api-key-not-valid' error.
-                // We rely on the app to continue initialization and mock the user state.
-                userId = 'anonymous-mock-user'; 
-                isAuthReady = true;
-                console.log("Firebase initialized (Mocked Auth). User ID:", userId);
-                startAppListener();
-
-                // Listen for Auth changes (will likely not fire, but included for structure)
-                onAuthStateChanged(auth, (user) => {
-                    if (user && user.uid !== 'anonymous-mock-user') {
-                        userId = user.uid;
-                        isAuthReady = true;
-                        startAppListener();
-                    }
-                });
-
-            } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                // If the app is rendered correctly but Firebase fails completely, show an error.
-                showModal("Configuration Status", "Application running in public mode. Database connection may be limited.", false);
-                isAuthReady = true; 
-                startAppListener();
-            }
-        }
-
-        // --- Data Listener and UI Update ---
-        function startAppListener() {
-            if (!db || !isAuthReady) return;
-
-            const routesCollectionRef = collection(db, getCollectionPath());
-            const q = query(routesCollectionRef);
-
-            // Real-time listener
-            onSnapshot(q, (snapshot) => {
-                currentRoutes = [];
-                snapshot.forEach((doc) => {
-                    const data = doc.data();
-                    currentRoutes.push({ id: doc.id, ...data });
-                });
-
-                // Sort the routes for consistent display
-                currentRoutes.sort((a, b) => {
-                    const routeA = String(a.routeNumber).toUpperCase();
-                    const routeB = String(b.routeNumber).toUpperCase();
-                    if (routeA < routeB) return -1;
-                    if (routeA > routeB) return 1;
-                    return 0;
-                });
-
-                console.log("Routes updated:", currentRoutes);
-                updateUI(document.body.getAttribute('data-view'));
-            }, (error) => {
-                console.error("Firestore Listener Error:", error);
-                // Only show this error if the database connection genuinely fails
-                if (error.code !== 'permission-denied') { 
-                    showModal("Data Error", "Failed to listen for live route updates. Check console.", true);
-                }
-            });
-        }
-
-        // --- UI Rendering ---
-        function updateUI(view) {
-            const appDiv = document.getElementById('app');
-            appDiv.innerHTML = ''; // Clear current view
-            document.body.setAttribute('data-view', view);
-            
-            if (view === 'student') {
-                appDiv.appendChild(createStudentView());
-            } else if (view === 'admin') {
-                appDiv.appendChild(createAdminView());
-            }
-        }
-
-        // Student View
-        function createStudentView() {
-            const container = document.createElement('div');
-            container.className = 'bg-white p-8 rounded-xl shadow-2xl w-full max-w-lg space-y-6 transition-all duration-300';
-            container.innerHTML = `
-                <h1 class="text-3xl font-extrabold text-indigo-700 text-center border-b-2 pb-3 mb-4">Find Your Bus</h1>
-                <div class="space-y-4">
-                    <label for="route-select" class="block text-sm font-medium text-gray-700">Select your designated student route:</label>
-                    <select id="route-select" class="mt-1 block w-full pl-3 pr-10 py-3 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 rounded-lg shadow-sm bg-white">
-                        <option value="">-- Select a Route --</option>
-                    </select>
-                    <div id="bus-info" class="p-4 mt-4 bg-indigo-50 rounded-lg text-center shadow-inner ${currentRoutes.length === 0 ? '' : 'hidden'}">
-                        <p class="text-lg font-semibold text-gray-700">${currentRoutes.length === 0 ? 'No Routes have been added yet.' : 'Your Bus Number is:'}</p>
-                        <p id="bus-number-display" class="text-5xl font-extrabold text-indigo-600 mt-1">--</p>
-                    </div>
-                </div>
-                <div class="pt-4 border-t mt-6 text-center">
-                    <button id="admin-login-btn" class="text-sm text-gray-500 hover:text-indigo-600 transition duration-150">
-                        Log In to Admin Panel
+            {/* Add Route Form */}
+            <div className="bg-gray-50 p-6 rounded-xl shadow-inner border border-gray-200">
+                <h2 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+                    <Plus className="mr-2 h-5 w-5 text-green-600" />
+                    Add New Route
+                </h2>
+                <form onSubmit={handleAddRoute} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <input 
+                        type="text" 
+                        // Updated placeholder to reflect custom naming
+                        placeholder="Custom Route Name (e.g., Downtown Express, North Loop)"
+                        required
+                        value={routeName}
+                        onChange={(e) => setRouteName(e.target.value)}
+                        className="col-span-1 md:col-span-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-green-500 focus:border-green-500 p-3"
+                    />
+                    <input 
+                        type="number" 
+                        placeholder="Bus Number (e.g., 101)"
+                        required
+                        value={busNumber}
+                        onChange={(e) => setBusNumber(e.target.value)}
+                        className="col-span-1 md:col-span-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-green-500 focus:border-green-500 p-3"
+                    />
+                    <button type="submit" className="col-span-1 w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition duration-150 shadow-md">
+                        Add Route
                     </button>
-                </div>
-            `;
-            
-            const select = container.querySelector('#route-select');
-            const busInfoDiv = container.querySelector('#bus-info');
-            const busNumberDisplay = container.querySelector('#bus-number-display');
-            const adminLoginBtn = container.querySelector('#admin-login-btn');
+                </form>
+            </div>
 
-            // Populate select options
-            currentRoutes.forEach(route => {
-                const option = document.createElement('option');
-                option.value = route.busNumber;
-                option.textContent = `Route ${route.routeNumber} - Bus ${route.busNumber}`;
-                select.appendChild(option);
-            });
+            {/* Current Routes List */}
+            <h2 className="text-xl font-semibold text-gray-800 mt-8 mb-4">
+                Current Routes ({routes.length} Total)
+            </h2>
+            <div className="space-y-3">
+                {routes.length === 0 ? (
+                    <p className="text-center text-gray-500 p-6 border rounded-xl bg-yellow-50">
+                        No routes have been added yet. Use the form above to get started.
+                    </p>
+                ) : (
+                    routes.map(route => (
+                        <div key={route.id} className="flex items-center justify-between bg-white p-4 rounded-xl border border-gray-200 shadow-md transition duration-100 hover:shadow-lg">
+                            <div className="text-lg font-medium text-gray-700">
+                                {/* Display custom route name and remove hardcoded "Route" */}
+                                <span className="font-bold text-green-600">{route.routeName}</span>: Bus {route.busNumber}
+                            </div>
+                            <button 
+                                onClick={() => handleDelete(route)}
+                                className="text-red-500 hover:text-red-700 p-2 rounded-full hover:bg-red-100 transition duration-150 shadow-sm"
+                                aria-label={`Delete route ${route.routeName}`}
+                            >
+                                <Trash2 className="h-5 w-5" />
+                            </button>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+};
 
-            // Event Listener for Route Selection
-            select.addEventListener('change', (e) => {
-                const selectedBusNumber = e.target.value;
-                if (selectedBusNumber) {
-                    busNumberDisplay.textContent = selectedBusNumber;
-                    busInfoDiv.classList.remove('hidden');
-                    busInfoDiv.querySelector('p:first-child').textContent = 'Your Bus Number is:';
+// --- Main Application Component ---
+
+const App = () => {
+    // Firebase State
+    const [db, setDb] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+    
+    // Application State
+    const [currentView, setCurrentView] = useState('student');
+    const [routes, setRoutes] = useState([]);
+    
+    // Modal State
+    const [modalState, setModalState] = useState({ isOpen: false, title: '', message: '', type: 'message', hideClose: false, confirmCallback: null, confirmText: 'Confirm' });
+
+    // --- Modal Handlers ---
+    const showModal = useCallback((title, message, type = 'message', confirmCallback = null, confirmText = 'Confirm') => {
+        setModalState({ 
+            isOpen: true, 
+            title, 
+            message, 
+            type, 
+            hideClose: (type === 'auth' || type === 'confirm'), // Hide default X for auth/confirm
+            confirmCallback,
+            confirmText
+        });
+    }, []);
+
+    const closeModal = useCallback(() => {
+        setModalState(prev => ({ ...prev, isOpen: false }));
+    }, []);
+
+    const handleConfirm = () => {
+        if (modalState.confirmCallback) {
+            modalState.confirmCallback();
+        }
+        closeModal();
+    };
+
+    // --- Authentication Logic ---
+    const showAuthModal = () => {
+        const AuthForm = () => {
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState(false);
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                setError(false);
+                if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+                    localStorage.setItem(ADMIN_KEY_LS, 'true');
+                    setCurrentView('admin');
+                    closeModal();
                 } else {
-                    busInfoDiv.classList.add('hidden');
+                    setError(true);
                 }
-            });
-            
-            // Event Listener for Admin Login Button
-            adminLoginBtn.addEventListener('click', showLoginModal);
+            };
 
-            return container;
-        }
-        
-        // Admin View
-        function createAdminView() {
-            const container = document.createElement('div');
-            container.className = 'bg-white p-8 rounded-xl shadow-2xl w-full max-w-2xl space-y-6';
-            container.innerHTML = `
-                <h1 class="text-3xl font-extrabold text-green-700 text-center border-b-2 pb-3 mb-4">Admin Panel</h1>
-                
-                <div class="flex justify-end">
-                    <button id="admin-logout-btn" class="text-sm text-red-500 hover:text-red-700 transition duration-150 flex items-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 001 1h11a1 1 0 001-1v-2a1 1 0 10-2 0v1H4V4h10v1a1 1 0 102 0V4a1 1 0 00-1-1H3zm10 8a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
-                            <path fill-rule="evenodd" d="M17 11.586l-2-2a1 1 0 00-1.414 1.414L15.586 12H9a1 1 0 100 2h6.586l-1.293 1.293a1 1 0 001.414 1.414l2-2a1 1 0 000-1.414z" clip-rule="evenodd" />
-                        </svg>
-                        Log Out
-                    </button>
-                </div>
-
-                <div class="bg-gray-50 p-6 rounded-lg shadow-inner">
-                    <h2 class="text-xl font-semibold text-gray-800 mb-4">Add New Route</h2>
-                    <form id="add-route-form" class="space-y-4">
-                        <div>
-                            <label for="route-number-input" class="block text-sm font-medium text-gray-700">Route Number (e.g., A, B, 1, 2)</label>
-                            <input type="text" id="route-number-input" required class="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-green-500 focus:border-green-500 p-2">
-                        </div>
-                        <div>
-                            <label for="bus-number-input" class="block text-sm font-medium text-gray-700">Bus Number (e.g., 101, 203)</label>
-                            <input type="number" id="bus-number-input" required class="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-green-500 focus:border-green-500 p-2">
-                        </div>
-                        <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md">
-                            Add Route
-                        </button>
-                    </form>
-                </div>
-
-                <h2 class="text-xl font-semibold text-gray-800 mt-8 mb-4">Current Routes (${currentRoutes.length} Total)</h2>
-                <div id="route-list" class="space-y-3">
-                    <!-- Routes will be injected here -->
-                </div>
-            `;
-            
-            container.querySelector('#admin-logout-btn').addEventListener('click', handleLogout);
-            container.querySelector('#add-route-form').addEventListener('submit', handleAddRoute);
-            
-            const routeListDiv = container.querySelector('#route-list');
-            
-            // Inject current routes into the list
-            if (currentRoutes.length === 0) {
-                routeListDiv.innerHTML = '<p class="text-center text-gray-500 p-4 border rounded-lg">No routes have been added yet.</p>';
-            } else {
-                currentRoutes.forEach(route => {
-                    const routeItem = document.createElement('div');
-                    routeItem.className = 'flex items-center justify-between bg-white p-4 rounded-lg border border-gray-200 shadow-sm transition duration-100 hover:shadow-md';
-                    routeItem.innerHTML = `
-                        <div class="text-lg font-medium text-gray-700">
-                            <span class="font-bold text-green-600">Route ${route.routeNumber}</span>: Bus ${route.busNumber}
-                        </div>
-                        <button data-id="${route.id}" class="delete-route-btn text-red-500 hover:text-red-700 p-2 rounded-full hover:bg-red-100 transition duration-150">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 100 2v6a1 1 0 100-2V8z" clip-rule="evenodd" />
-                            </svg>
-                        </button>
-                    `;
-                    
-                    routeItem.querySelector('.delete-route-btn').addEventListener('click', handleDeleteRoute);
-                    routeListDiv.appendChild(routeItem);
-                });
-            }
-            
-            return container;
-        }
-
-        // --- Authentication Functions ---
-        function showLoginModal() {
-            const container = document.createElement('div');
-            container.className = 'bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm space-y-4';
-            container.innerHTML = `
-                <h2 class="text-2xl font-bold text-gray-900 text-center">Admin Login</h2>
-                <form id="login-form" class="space-y-4">
+            return (
+                <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label for="login-username" class="block text-sm font-medium text-gray-700">Username</label>
-                        <input type="text" id="login-username" required class="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2">
+                        <label className="block text-sm font-medium text-gray-700">Username</label>
+                        <input type="text" required value={username} onChange={e => setUsername(e.target.value)} 
+                                className="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2" />
                     </div>
                     <div>
-                        <label for="login-password" class="block text-sm font-medium text-gray-700">Password</label>
-                        <input type="password" id="login-password" required class="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2">
+                        <label className="block text-sm font-medium text-gray-700">Password</label>
+                        <input type="password" required value={password} onChange={e => setPassword(e.target.value)} 
+                                className="mt-1 block w-full border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2" />
                     </div>
-                    <p id="login-error-message" class="text-red-500 text-sm hidden">Invalid credentials. Try again.</p>
-                    <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md">
+                    {error && <p className="text-red-500 text-sm">Invalid credentials. Try again.</p>}
+                    <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md">
                         Log In
                     </button>
                 </form>
-            `;
-            
-            const loginForm = container.querySelector('#login-form');
-            loginForm.addEventListener('submit', handleLogin);
-            
-            showModal("Admin Login", container.outerHTML);
-            document.getElementById('modal-close-btn').classList.add('hidden'); // Hide default close button for login
-        }
+            );
+        };
 
-        async function handleLogin(e) {
-            e.preventDefault();
-            const username = document.getElementById('login-username').value;
-            const password = document.getElementById('login-password').value;
-            const errorMessage = document.getElementById('login-error-message');
-            
-            errorMessage.classList.add('hidden');
+        // Pass the component directly as the message prop
+        showModal("Admin Login", <AuthForm />, 'auth', null, null);
+    };
 
-            if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-                localStorage.setItem(ADMIN_SECRET_KEY, 'true');
-                closeModal();
-                updateUI('admin');
-            } else {
-                errorMessage.classList.remove('hidden');
-            }
-        }
-        
-        function handleLogout() {
-            localStorage.removeItem(ADMIN_SECRET_KEY);
-            updateUI('student');
-        }
+    const handleLogout = () => {
+        localStorage.removeItem(ADMIN_KEY_LS);
+        setCurrentView('student');
+    };
 
-        // --- CRUD Operations ---
-        async function handleAddRoute(e) {
-            e.preventDefault();
-            if (!isAuthReady) {
-                showModal("Access Denied", "Database is not ready. Please try refreshing.", true);
-                return;
-            }
+    // --- Firebase Initialization and Listener ---
+    useEffect(() => {
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestore = getFirestore(app);
+            const auth = getAuth(app);
+            setDb(firestore);
 
-            const routeNumberInput = document.getElementById('route-number-input');
-            const busNumberInput = document.getElementById('bus-number-input');
-            
-            const routeNumber = routeNumberInput.value.trim();
-            const busNumber = parseInt(busNumberInput.value, 10);
-
-            if (!routeNumber || isNaN(busNumber)) {
-                showModal("Validation Error", "Please enter a valid route number and bus number.", true);
-                return;
-            }
-            
-            if (currentRoutes.some(r => String(r.routeNumber).toUpperCase() === routeNumber.toUpperCase())) {
-                showModal("Conflict", `Route ${routeNumber} already exists. Please delete it before re-adding.`, true);
-                return;
-            }
-
-            try {
-                const routesCollectionRef = collection(db, getCollectionPath());
-                await addDoc(routesCollectionRef, {
-                    routeNumber: routeNumber,
-                    busNumber: busNumber,
-                    createdAt: Date.now()
-                });
-
-                routeNumberInput.value = '';
-                busNumberInput.value = '';
-                showModal("Success", `Route ${routeNumber} (Bus ${busNumber}) added successfully.`);
-
-            } catch (error) {
-                console.error("Error adding route:", error);
-                showModal("Database Error", "Failed to save the new route. Check console for details.", true);
-            }
-        }
-
-        async function handleDeleteRoute(e) {
-            const routeId = e.currentTarget.getAttribute('data-id');
-            const route = currentRoutes.find(r => r.id === routeId);
-
-            if (!routeId || !route) {
-                showModal("Error", "Invalid route selected for deletion.", true);
-                return;
-            }
-            
-            // Note: Cannot use confirm(), using a simplified modal message instead
-            showModal("Confirm Deletion", `Are you sure you want to delete Route ${route.routeNumber} (Bus ${route.busNumber})?`, false);
-            document.getElementById('modal-close-btn').classList.add('hidden'); // Hide close button
-            
-            const confirmDiv = document.createElement('div');
-            confirmDiv.id = 'confirm-delete-div';
-            confirmDiv.className = 'flex justify-center space-x-4 mt-6';
-            confirmDiv.innerHTML = `
-                <button id="confirm-delete-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">Yes, Delete</button>
-                <button id="cancel-delete-btn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-150">Cancel</button>
-            `;
-            
-            document.getElementById('modal-content').appendChild(confirmDiv);
-
-            document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
-                if (!isAuthReady) {
-                    closeModal();
-                    showModal("Access Denied", "Database is not ready. Please try refreshing.", true);
-                    return;
+            const authAndCheckView = async () => {
+                // Sign in using the custom token if provided, otherwise sign in anonymously
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
                 }
+
+                setIsAuthReady(true);
                 
-                try {
-                    const docRef = doc(db, getCollectionPath(), routeId);
-                    await deleteDoc(docRef);
-                    closeModal();
-                    // UI will update via onSnapshot listener
-                } catch (error) {
-                    console.error("Error deleting route:", error);
-                    closeModal();
-                    showModal("Database Error", "Failed to delete the route. Check console for details.", true);
+                // Check local storage for existing admin session
+                if (localStorage.getItem(ADMIN_KEY_LS) === 'true') {
+                    setCurrentView('admin');
+                } else {
+                    setCurrentView('student');
                 }
+            };
+            
+            authAndCheckView();
+
+        } catch (error) {
+            console.error("Firebase Initialization Error:", error);
+            showModal("Configuration Error", "Firebase failed to initialize. Data access may be restricted.", 'error');
+            setIsAuthReady(true);
+        }
+    }, [showModal]);
+
+    // Data listener effect
+    useEffect(() => {
+        if (!db || !isAuthReady) return;
+
+        const routesCollectionRef = collection(db, getCollectionPath());
+        const q = query(routesCollectionRef);
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const fetchedRoutes = [];
+            snapshot.forEach((doc) => {
+                const data = doc.data();
+                // We assume new data uses 'routeName'. We'll map the old 'routeNumber' property
+                // to 'routeName' for consistency if it exists (for compatibility with previous saves).
+                const name = data.routeName || data.routeNumber;
+                
+                // If a record has neither, skip it or assign a placeholder, but for now we trust the data structure.
+                fetchedRoutes.push({ 
+                    id: doc.id, 
+                    routeName: name || 'Unnamed Route', // Ensure routeName is always present
+                    busNumber: data.busNumber 
+                });
             });
-            
-            document.getElementById('cancel-delete-btn').addEventListener('click', closeModal);
-        }
 
-        // --- Setup and Main Logic ---
-        window.onload = function () {
-            // Setup Modal Close Button
-            document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+            // Sort by route name for consistent display
+            fetchedRoutes.sort((a, b) => {
+                const routeA = String(a.routeName).toUpperCase();
+                const routeB = String(b.routeName).toUpperCase();
+                if (routeA < routeB) return -1;
+                if (routeA > routeB) return 1;
+                return 0;
+            });
 
-            // Initial view check
-            if (localStorage.getItem(ADMIN_SECRET_KEY) === 'true') {
-                updateUI('admin');
-            } else {
-                updateUI('student');
-            }
-            
-            // Start Firebase connection
-            initializeFirebase();
-        }
+            setRoutes(fetchedRoutes);
+            console.log("Routes updated:", fetchedRoutes);
+        }, (error) => {
+            console.error("Firestore Listener Error:", error);
+            showModal("Data Sync Error", "Failed to load live route updates. Check console.", 'error');
+        });
 
-    </script>
-</head>
-<body class="bg-gray-100 min-h-screen">
-    <div id="app" class="w-full max-w-md space-y-6">
-        <!-- App view will be injected here -->
-    </div>
+        // Cleanup subscription on component unmount
+        return () => unsubscribe();
+    }, [db, isAuthReady, showModal]);
 
-    <!-- Custom Modal Structure -->
-    <div id="modal-backdrop" class="fixed inset-0 hidden bg-black bg-opacity-50 flex items-center justify-center p-4">
-        <div id="modal-content" class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 relative">
-            <button id="modal-close-btn" class="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-            </button>
-            <h3 id="modal-title" class="text-xl font-bold mb-4 text-gray-900">Modal Title</h3>
-            <div id="modal-message" class="text-gray-700">Modal Message Content.</div>
+
+    if (!isAuthReady) {
+        return (
+            <div className="flex items-center justify-center h-screen w-full">
+                <div className="text-center p-8 bg-white rounded-xl shadow-lg">
+                    <div className="w-12 h-12 border-4 border-indigo-400 border-t-transparent border-solid rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-lg text-indigo-600 font-medium">Connecting to system...</p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-gray-100 p-8 flex justify-center w-full">
+            {/* Render the appropriate view based on state */}
+            {currentView === 'student' ? (
+                <StudentView routes={routes} showLoginModal={showAuthModal} />
+            ) : (
+                <AdminView 
+                    routes={routes} 
+                    db={db} 
+                    showModal={showModal} 
+                    logout={handleLogout} 
+                />
+            )}
+
+            {/* Global Modal Component */}
+            <MessageModal 
+                modalState={modalState} 
+                closeModal={closeModal} 
+                handleConfirm={handleConfirm} 
+            />
         </div>
-    </div>
-</body>
-</html>
+    );
+};
+
+export default App;
