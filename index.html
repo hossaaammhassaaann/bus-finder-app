@@ -595,8 +595,14 @@
             // 1. Check if configuration exists
             if (isExternal) {
                 console.warn("External environment detected. Firebase connection skipped.");
-                // Ensure to load dummy view state for non-functional mode
-                currentRoutes = [{ id: 'dummy-1', routeName: 'Parkside Loop', busNumber: '101' }, { id: 'dummy-2', routeName: 'Riverfront Shuttle', busNumber: '205' }];
+                
+                // --- STATIC ROUTES DEFINED HERE ---
+                currentRoutes = [
+                    { id: 'dummy-bahr', routeName: 'Bahr', busNumber: '1' }, 
+                    { id: 'dummy-sidi', routeName: 'Sidi Gaber', busNumber: '2' }
+                ];
+                // ----------------------------------
+
                 currentView = 'student';
                 // Check local storage for existing admin session (still allows admin login, but no DB access)
                 if (localStorage.getItem(ADMIN_KEY_LS) === 'true') {
